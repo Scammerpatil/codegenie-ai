@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import Editor, { Monaco } from "@monaco-editor/react";
-import { IconPlayerPlay, IconTrash, IconCode } from "@tabler/icons-react";
+import { IconPlayerPlay, IconTrash, IconCode, IconSparkles } from "@tabler/icons-react";
+import Markdown from "react-markdown";
 import AnsiToHtml from "ansi-to-html";
 import Title from "@/components/Title";
 import axios from "axios";
@@ -20,6 +21,8 @@ export default function CodePlayground() {
   );
   const [output, setOutput] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  const [aiExplanation, setAiExplanation] = useState<string | null>(null);
+  const [isLoadingExplanation, setIsLoadingExplanation] = useState(false);
 
   useEffect(() => {
     const defaultCodes: { [key: string]: string } = {
@@ -46,6 +49,7 @@ int main() {
 }`,
     };
     setOutput(null);
+    setAiExplanation(null);
     setCode(defaultCodes[language]);
   }, [language]);
 
@@ -76,22 +80,42 @@ int main() {
     // await connectToLsp(monaco, language);
   };
 
+  const fetchAiExplanation = async (errorText: string) => {
+    setIsLoadingExplanation(true);
+    setAiExplanation(null);
+    try {
+      const prompt = `The following error occurred while running ${language} code:\n\nCode:\n\`\`\`${language}\n${code}\n\`\`\`\n\nError:\n${errorText}\n\nPlease explain this error clearly and provide a step-by-step resolution.`;
+      const res = await axios.post("/api/code/gemini", { input: prompt });
+      setAiExplanation(res.data.output);
+    } catch {
+      setAiExplanation("Failed to fetch AI explanation.");
+    } finally {
+      setIsLoadingExplanation(false);
+    }
+  };
+
   // Run code
   const runCode = async () => {
     setIsRunning(true);
     setOutput(null);
+    setAiExplanation(null);
     try {
       const response = axios.post("/api/code/run", { language, code });
       toast.promise(response, {
         loading: "Running code...",
         success: (res) => {
           const converter = new AnsiToHtml();
-          setOutput(converter.toHtml(res.data.output));
-          console.log("Code run output:", res.data);
+          const rawOutput: string = res.data.output;
+          setOutput(converter.toHtml(rawOutput));
+          if (rawOutput.startsWith("⚠️ Errors:") || rawOutput.startsWith("❌ Runtime Error:")) {
+            fetchAiExplanation(rawOutput);
+          }
           return "Code executed successfully!";
         },
         error: (err) => {
-          setOutput(`❌ Error: ${err.response?.data?.error || err.message}`);
+          const errorMsg: string = err.response?.data?.error || err.message;
+          setOutput(`❌ Error: ${errorMsg}`);
+          fetchAiExplanation(errorMsg);
           return "Error executing code";
         },
       });
@@ -103,6 +127,7 @@ int main() {
   const clearCode = () => {
     setCode("");
     setOutput(null);
+    setAiExplanation(null);
   };
 
   const handleCopilotMount = (editor: any, monaco: Monaco) => {
@@ -215,6 +240,28 @@ int main() {
           />
         </div>
       </pre>
+
+      {/* AI Error Explanation */}
+      {(isLoadingExplanation || aiExplanation) && (
+        <div className="border border-warning bg-base-200 rounded-md mt-4">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-warning/40">
+            <IconSparkles size={18} className="text-warning" />
+            <h3 className="font-semibold text-warning text-sm">AI Error Explanation</h3>
+          </div>
+          <div className="p-4">
+            {isLoadingExplanation ? (
+              <div className="flex items-center gap-2 text-sm text-base-content/60">
+                <span className="loading loading-spinner loading-sm"></span>
+                Analyzing error...
+              </div>
+            ) : (
+              <div className="prose prose-sm max-w-none">
+                <Markdown>{aiExplanation}</Markdown>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </>
   );
 }
